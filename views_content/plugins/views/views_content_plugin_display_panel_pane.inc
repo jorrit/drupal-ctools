@@ -9,8 +9,8 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    * this variable so that other modules can create alternate pane displays.
    */
   public $panel_pane_display = TRUE;
-  public $has_pane_conf = NULL;
 
+  private $view_pane_conf = NULL;
 
   public function option_definition() {
     $options = parent::option_definition();
@@ -45,15 +45,20 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     return $options;
   }
 
-
-  public function has_pane_conf() {
-    return isset($this->has_pane_conf);
-  }
-
-
+  /**
+   * Set the pane configuration. This happens when the pane is initially
+   * displayed.
+   *
+   * This method converts the pane configuration to views configuration and
+   * caches this configuration in order to apply it on AJAX requests for this
+   * view.
+   *
+   * @param array $conf*/
   public function set_pane_conf($conf = array()) {
-    $this->set_option('pane_conf', $conf);
-    $this->has_pane_conf = TRUE;
+    $viewconf = $this->build_views_conf_from_pane_conf($conf);
+    $this->view_pane_conf = $viewconf;
+    $this->view->dom_id = !empty($this->view->dom_id) ? $this->view->dom_id : md5($this->view->name . serialize($viewconf));
+    cache_set('view_panel_pane:' . $this->view->dom_id, $viewconf, 'cache_panel_conf');
   }
 
   /**
@@ -372,17 +377,6 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     return $output;
   }
 
-
-  public function use_more() {
-    $allow = $this->get_option('allow');
-    if (!$allow['more_link'] || !$this->has_pane_conf()) {
-      return parent::use_more();
-    }
-    $conf = $this->get_option('pane_conf');
-    return (bool) $conf['more_link'];
-  }
-
-
   public function get_path() {
     if (empty($this->view->override_path)) {
       return parent::get_path();
@@ -390,14 +384,12 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     return $this->view->override_path;
   }
 
-
   public function get_url() {
     if ($this->get_option('inherit_panels_path')) {
       return $this->get_path();
     }
     return parent::get_url();
   }
-
 
   public function uses_exposed_form_in_block() {
     // We'll always allow the exposed form in a block, regardless of path.
@@ -414,10 +406,200 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    * displayed unless uses_exposed() returns TRUE.
    */
   public function displays_exposed() {
-    $conf = $this->get_option('allow');
+    $allow = $this->get_option('allow');
     // If this is set, the exposed form is part of pane configuration, not
     // rendered normally.
-    return empty($conf['exposed_form']);
+    return empty($allow['exposed_form']);
+  }
+
+  /**
+   * Load the view conf from cache and apply it to the view.
+   * 
+   * If the view conf is already loaded, apply it.
+   */
+  public function load_view_conf() {
+    if (empty($this->view_pane_conf)) {
+      if (empty($this->view->dom_id) || !($cache = cache_get('view_panel_pane:' . $this->view->dom_id, 'cache_panel_conf'))) {
+        return;
+      }
+      $this->view_pane_conf = $cache->data;
+    }
+
+    if (!empty($this->view_pane_conf)) {
+      $this->apply_view_conf();
+    }
+  }
+
+  /**
+   * Apply $this->view_pane_conf to the view.
+   */
+  private function apply_view_conf() {
+    $viewconf = $this->view_pane_conf;
+
+    $this->view->override_path = $viewconf['override_path'];
+
+    if (!empty($viewconf['options'])) {
+      foreach ($viewconf['options'] as $optionkey => $optionvalue) {
+        $this->set_option($optionkey, $optionvalue);
+      }
+    }
+
+    if (isset($viewconf['get_total_rows'])) {
+      $this->view->get_total_rows = $viewconf['get_total_rows'];
+    }
+
+    foreach ($viewconf as $key => $value) {
+      if (strncmp('set_', $key, 4) === 0) {
+        call_user_func(array($this->view, $key), $value);
+      }
+    }
+
+    if (isset($viewconf['fields_override'])) {
+      $fields = $this->view->get_items('field');
+      foreach ($fields as $field => $field_display) {
+        $fields[$field]['exclude'] = empty($viewconf['fields_override'][$field]);
+      }
+        $this->set_option('fields', $fields);
+    }
+  }
+
+  private function build_views_conf_from_pane_conf($conf) {
+    ctools_include('context');
+
+    $viewconf = array();
+    $options = array();
+
+    $contexts = $conf['pane_contexts'];
+    $args = array();
+    $arguments = $this->get_option('arguments');
+
+    $context_keys = isset($conf['context']) ? $conf['context'] : array();
+    foreach ($this->get_argument_input() as $id => $argument) {
+      switch ($argument['type']) {
+        case 'context':
+          $key = array_shift($context_keys);
+          if (isset($contexts[$key])) {
+            if (strpos($argument['context'], '.')) {
+              list($context, $converter) = explode('.', $argument['context'], 2);
+              $args[] = ctools_context_convert_context($contexts[$key], $converter, array('sanitize' => FALSE));
+            }
+            else {
+              $args[] = $contexts[$key]->argument;
+            }
+          }
+          else {
+            $args[] = isset($arguments[$id]['exception']['value']) ? $arguments[$id]['exception']['value'] : 'all';
+          }
+          break;
+
+        case 'fixed':
+          $args[] = $argument['fixed'];
+          break;
+
+        case 'panel':
+          $args[] = isset($conf['panel_args'][$argument['panel']]) ? $conf['panel_args'][$argument['panel']] : NULL;
+          break;
+
+        case 'user':
+          $args[] = (isset($conf['arguments'][$id]) && $conf['arguments'][$id] !== '') ? ctools_context_keyword_substitute($conf['arguments'][$id], array(), $contexts) : NULL;
+          break;
+
+        case 'wildcard':
+          // Put in the wildcard.
+          $args[] = isset($arguments[$id]['wildcard']) ? $arguments[$id]['wildcard'] : '*';
+          break;
+
+        case 'none':
+        default:
+          // Put in NULL.
+          // views.module knows what to do with NULL (or missing) arguments
+          $args[] = NULL;
+          break;
+      }
+    }
+
+    // remove any trailing NULL arguments as these are non-args:
+    while (count($args) && end($args) === NULL) {
+      array_pop($args);
+    }
+
+    $viewconf['set_arguments'] = $args;
+
+    $allow = $this->get_option('allow');
+
+    if ($allow['path_override'] && !empty($conf['path'])) {
+      $viewconf['override_path'] = ctools_context_keyword_substitute($conf['path'], array(), $contexts);
+    }
+    else {
+      if ($path = $this->get_option('inherit_panels_path')) {
+        if (drupal_is_front_page()) {
+          $viewconf['override_path'] = '';
+        }
+        else {
+          $viewconf['override_path'] = $_GET['q'];
+        }
+      }
+    }
+
+    // more link
+    if ($allow['more_link']) {
+      if (empty($conf['more_link'])) {
+        $options['use_more'] = FALSE;
+      }
+      else {
+        $options['use_more'] = TRUE;
+        // make sure the view runs the count query so we know whether or not the
+        // more link applies.
+        $viewconf['get_total_rows'] = TRUE;
+      }
+    }
+
+    if ($allow['items_per_page'] && isset($conf['items_per_page'])) {
+      $viewconf['set_items_per_page'] = $conf['items_per_page'];
+    }
+
+    if ($allow['offset']) {
+      $viewconf['set_offset'] = $conf['offset'];
+    }
+
+    if ($allow['use_pager']) {
+      // Only set use_pager if they differ, this way we can avoid overwriting the
+      // pager type that Views uses.
+      $pager = $this->get_option('pager');
+      if ($conf['use_pager'] && ($pager['type'] == 'none' || $pager['type'] == 'some')) {
+        $pager['type'] = 'full';
+      }
+      elseif (!$conf['use_pager'] && $pager['type'] != 'none' && $pager['type'] != 'some') {
+        $pager['type'] = $this->view->get_items_per_page() || !empty($pager['options']['items_per_page']) ? 'some' : 'none';
+      }
+
+      if ($conf['use_pager']) {
+        if (!isset($pager['options']['id']) || (isset($conf['pager_id']) && $pager['options']['id'] != $conf['pager_id'])) {
+          $pager['options']['id'] = (int) $conf['pager_id'];
+        }
+      }
+
+      $options['pager'] = $pager;
+    }
+
+    if ($allow['fields_override'] && $conf['fields_override']) {
+      $viewconf['fields_override'] = array_filter($conf['fields_override']);
+    }
+
+    if ($allow['exposed_form'] && !empty($conf['exposed'])) {
+      foreach ($conf['exposed'] as $filter_name => $filter_value) {
+        if (!is_array($filter_value)) {
+          $conf['exposed'][$filter_name] = ctools_context_keyword_substitute($filter_value, array(), $contexts);
+        }
+      }
+      $viewconf['set_exposed_input'] = $conf['exposed'];
+    }
+    
+    if (!empty($options)) {
+      $viewconf['options'] = $options;
+    }
+
+    return $viewconf;
   }
 
 }
