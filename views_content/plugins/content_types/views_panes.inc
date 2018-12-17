@@ -385,6 +385,8 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
   }
 
   if ($allow['exposed_form']) {
+    $overrides = $view->display_handler->get_option('exposed_form_overrides');
+
     // If the exposed form is part of pane configuration, get the exposed
     // form re-tool it for our use.
     $exposed_form_state = array(
@@ -405,33 +407,81 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
       '#tree' => TRUE,
     );
 
-    foreach ($exposed_form['#info'] as $id => $info) {
-      $form['exposed'][$id] = array(
+    $handlerinfos = $view->display_handler->get_exposed_handler_info();
+
+    foreach ($handlerinfos['filters'] as $handlerid => $handlerinfo) {
+      // Don't set this if this is set to exposed.
+      if ($handlerinfo['expose_status'] === 'exposed') {
+        continue;
+      }
+
+      $filterelement = array(
         '#type' => 'item',
         '#id' => 'views-exposed-pane',
+        '#title' => $handlerinfo['title'],
       );
 
-      if (!empty($info['label'])) {
-        $form['exposed'][$id]['#title'] = $info['label'];
+      if ($handlerinfo['expose_status'] === 'configureable') {
+        $filterelement['expose_to_visitor'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Expose to visitor'),
+          '#default_value' => !empty($conf['exposed']['filter-' . $handlerid]['expose_to_visitor']),
+        );
       }
 
-      if (!empty($info['operator']) && !empty($exposed_form[$info['operator']])) {
-        $form['exposed'][$id][$info['operator']] = $exposed_form[$info['operator']];
-        $form['exposed'][$id][$info['operator']]['#parents'] = array('exposed', $info['operator']);
-        $form['exposed'][$id][$info['operator']]['#default_value'] = isset($conf['exposed'][$info['operator']]) ? $conf['exposed'][$info['operator']] : '';
+      // Copy inputs from fake exposed form.
+      $keys = array_filter(array($handlerinfo['valuekey'], $handlerinfo['operatorkey']));
+      foreach ($keys as $key) {
+        $filterelement[$key] = $exposed_form[$key];
+        $filterelement[$key]['#parents'] = array('exposed', $key);
+        $filterelement[$key]['#default_value'] = isset($conf['exposed'][$key]) ? $conf['exposed'][$key] : '';
       }
-      $form['exposed'][$id][$info['value']] = $exposed_form[$info['value']];
-      $form['exposed'][$id][$info['value']]['#parents'] = array('exposed', $info['value']);
-      $form['exposed'][$id][$info['value']]['#default_value'] = isset($conf['exposed'][$info['value']]) ? $conf['exposed'][$info['value']] : '';
+
+      $form['exposed']['filter-' . $handlerid] = $filterelement;
+    }
+  }
+
+  // Allow individual panes to disable exposed form.
+  if (!empty($allow['exposed_form_configure'])) {
+    $has_exposed = FALSE;
+    foreach ($view->display_handler->get_option('filters') as $filter) {
+      if (!empty($filter['exposed'])) {
+        $has_exposed = TRUE;
+        break;
+      }
+    }
+    if ($has_exposed) {
+      $form['show_exposed_form'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Show Exposed Form'),
+        '#default_value' => isset($conf['show_exposed_form']) ? $conf['show_exposed_form'] : TRUE,
+      );
     }
   }
 
   // The exposed sort stuff doesn't fall into $exposed_form['#info'] so we
   // have to handle it separately.
   if (isset($exposed_form['sort_by'])) {
+    $overrides = $view->display_handler->get_option('exposed_form_overrides');
     $form['exposed']['sort_by'] = $exposed_form['sort_by'];
     if (isset($conf['exposed']['sort_by'])) {
       $form['exposed']['sort_by']['#default_value'] = $conf['exposed']['sort_by'];
+    }
+    if (!empty($overrides['sorts'])) {
+      foreach (array_filter($overrides['sorts']) as $id => $value) {
+        if ($value && $value === 'exposed') {
+          unset($form['exposed']['sort_by']['#options'][$id]);
+        }
+      }
+      $count = count($form['exposed']['sort_by']['#options']);
+      if ($count === 1) {
+        $form['exposed']['sort_by']['#access'] = FALSE;
+        $form['exposed']['sort_by']['#value'] = key($form['exposed']['sort_by']['#options']);
+      }
+      elseif ($count === 0) {
+        unset($exposed_form['sort_by']);
+        unset($exposed_form['sort_order']);
+      }
     }
   }
 
@@ -454,7 +504,8 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
 function views_content_views_panes_content_type_edit_form_submit(&$form, &$form_state) {
   // Copy everything from our defaults.
   $keys = array('link_to_view', 'more_link', 'more_text', 'feed_icons', 'use_pager',
-    'pager_id', 'items_per_page', 'offset', 'path_override', 'path', 'arguments', 'fields_override', 'exposed',
+    'pager_id', 'items_per_page', 'offset', 'path_override', 'path', 'arguments',
+    'fields_override', 'exposed', 'show_exposed_form',
   );
 
   foreach ($keys as $key) {

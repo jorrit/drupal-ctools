@@ -10,7 +10,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    */
   public $panel_pane_display = TRUE;
 
-  private $view_pane_conf = NULL;
+  public $view_pane_conf = NULL;
 
   public function option_definition() {
     $options = parent::option_definition();
@@ -35,6 +35,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
         'path_override'   => array('default' => FALSE),
         'title_override'  => array('default' => FALSE),
         'exposed_form'    => array('default' => FALSE),
+        'exposed_form_configure' => array('default' => FALSE),
         'fields_override' => array('default' => FALSE),
       ),
     );
@@ -54,7 +55,8 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    * caches this configuration in order to apply it on AJAX requests for this
    * view.
    *
-   * @param array $conf*/
+   * @param array $conf
+   */
   public function set_pane_conf($conf = array()) {
     $viewconf = $this->build_views_conf_from_pane_conf($conf);
     $this->view_pane_conf = $viewconf;
@@ -177,6 +179,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
           'path_override' => t('Path override'),
           'title_override' => t('Title override'),
           'exposed_form' => t('Use exposed widgets form as pane configuration'),
+          'exposed_form_configure' => t('Show Exposed Form'),
           'fields_override' => t('Fields override'),
         );
 
@@ -186,6 +189,46 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
           '#default_value' => $allow,
           '#options' => $options,
         );
+
+        $form['exposed_form_overrides'] = array(
+          '#type' => 'fieldset',
+          '#title' => t('Exposed Form Filter Visibility'),
+          '#tree' => TRUE,
+          '#description' => t('Allows customizing which filters show up as pane configuration vs. exposed form.'),
+          '#states' => array(
+            'visible' => array(
+              ':input[name="allow[exposed_form]"]' => array('checked' => TRUE),
+            ),
+          ),
+        );
+
+        $handlerinfos = $this->get_exposed_handler_info();
+        foreach (array('filters' => t('Filters'), 'sorts' => t('Sorts')) as $type => $label) {
+          $options = array(
+            '' => t('Pane configuration form only'),
+            'pane_and_exposed' => t('Pane configuration form and exposed form'),
+            'configureable' => t('Pane configuration form and option for exposed form'),
+            'exposed' => t('Exposed form only'),
+          );
+
+          if ($type === 'sorts') {
+            unset($options['configureable']);
+          }
+          
+          foreach ($handlerinfos[$type] as $handlerid => $handlerinfo) {
+            $form['exposed_form_overrides'][$type][$handlerid] = array(
+              '#type' => 'select',
+              '#title' => check_plain($handlerinfo['title']),
+              '#options' => $options,
+              '#default_value' => $handlerinfo['expose_status'],
+            );
+          }
+
+          if (!empty($form['exposed_form_overrides'][$type])) {
+            $form['exposed_form_overrides'][$type]['#type'] = 'fieldset';
+            $form['exposed_form_overrides'][$type]['#title'] = $label;
+          }
+        }
         break;
 
       case 'pane_title':
@@ -334,6 +377,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     parent::options_submit($form, $form_state);
     switch ($form_state['section']) {
       case 'allow':
+        $this->set_option('exposed_form_overrides', $form_state['values']['exposed_form_overrides']);
       case 'argument_input':
       case 'link_to_view':
       case 'inherit_panels_path':
@@ -408,15 +452,27 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    * displayed unless uses_exposed() returns TRUE.
    */
   public function displays_exposed() {
+    $viewconf = $this->view_pane_conf;
+
+    // Allow individual panes to disable exposed form.
+    if (isset($viewconf['show_exposed_form']) && !$viewconf['show_exposed_form']) {
+      return FALSE;
+    }
+
     $allow = $this->get_option('allow');
-    // If this is set, the exposed form is part of pane configuration, not
-    // rendered normally.
-    return empty($allow['exposed_form']);
+    // If exposed_form is set, the exposed form is part of pane configuration,
+    // not rendered normally.
+    if (!$allow['exposed_form']) {
+      return TRUE;
+    }
+
+    // If any exposed filter is visible, display the form.
+    return !empty($viewconf['exposed']['filters']) || !empty($viewconf['exposed']['sorts']);
   }
 
   /**
    * Load the view conf from cache and apply it to the view.
-   * 
+   *
    * If the view conf is already loaded, apply it.
    */
   public function load_view_conf() {
@@ -438,7 +494,9 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
   private function apply_view_conf() {
     $viewconf = $this->view_pane_conf;
 
-    $this->view->override_path = $viewconf['override_path'];
+    if (isset($viewconf['override_path'])) {
+      $this->view->override_path = $viewconf['override_path'];
+    }
 
     if (!empty($viewconf['options'])) {
       foreach ($viewconf['options'] as $optionkey => $optionvalue) {
@@ -461,7 +519,48 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
       foreach ($fields as $field => $field_display) {
         $fields[$field]['exclude'] = empty($viewconf['fields_override'][$field]);
       }
-        $this->set_option('fields', $fields);
+      $this->set_option('fields', $fields);
+    }
+
+    if (isset($viewconf['exposed'])) {
+      $exposed_input = $viewconf['exposed']['values'];
+      $current_exposed = $this->view->get_exposed_input();
+
+      // Load user input.
+      if (!empty($current_exposed)) {
+        // Load user input for exposed filters.
+        if (!empty($viewconf['exposed']['filters'])) {
+          $handlerinfos = $this->get_exposed_handler_info();
+          foreach ($viewconf['exposed']['filters'] as $filter_id) {
+            // Copy the user input value.
+            $valuekey = $handlerinfos['filters'][$filter_id]['valuekey'];
+            if (isset($current_exposed[$valuekey])) {
+              $exposed_input[$valuekey] = $current_exposed[$valuekey];
+            }
+
+            // Copy the user input operator, if allowed.
+            if (!empty($handlerinfos['filters'][$filter_id]['operatorkey'])) {
+              $operatorkey = $handlerinfos['filters'][$filter_id]['operatorkey'];
+              if (isset($current_exposed[$operatorkey])) {
+                $exposed_input[$operatorkey] = $current_exposed[$operatorkey];
+              }
+            }
+          }
+        }
+
+        // Override configured values with input from exposed form.
+        if (!empty($viewconf['exposed']['sorts']) && isset($current_exposed['sort_by'])) {
+          $exposed_input['sort_by'] = $current_exposed['sort_by'];
+          $exposed_input['sort_order'] = $current_exposed['sort_order'];
+        }
+
+        // Preserve op so reset works.
+        if (isset($current_exposed['op'])) {
+          $exposed_input['op'] = $current_exposed['op'];
+        }
+      }
+
+      $this->view->set_exposed_input($exposed_input);
     }
   }
 
@@ -591,20 +690,141 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
       $viewconf['fields_override'] = array_filter($conf['fields_override']);
     }
 
+    if ($allow['exposed_form_configure']) {
+      $viewconf['show_exposed_form'] = !empty($conf['show_exposed_form']);
+    }
+
     if ($allow['exposed_form'] && !empty($conf['exposed'])) {
-      foreach ($conf['exposed'] as $filter_name => $filter_value) {
-        if (!is_array($filter_value)) {
-          $conf['exposed'][$filter_name] = ctools_context_keyword_substitute($filter_value, array(), $contexts);
+      $exposed = array(
+        'filters' => array(),
+        'sorts' => array(),
+        'values' => array(),
+      );
+
+      // Process filter configuration.
+      $handlerinfos = $this->get_exposed_handler_info();
+      foreach ($handlerinfos as $handlertype => $handlertypeinfos) {
+        foreach ($handlertypeinfos as $handlerid => $handlerinfo) {
+          $visitor = FALSE;
+          $pane = FALSE;
+
+          switch ($handlerinfo['expose_status']) {
+            case '':
+              $pane = TRUE;
+              break;
+
+            case 'pane_and_exposed':
+              $visitor = TRUE;
+              $pane = TRUE;
+              break;
+
+            case 'exposed':
+              $visitor = TRUE;
+              break;
+
+            case 'configureable':
+              $visitor = !empty($conf['exposed']['filter-' . $handlerid]['expose_to_visitor']);
+              $pane = TRUE;
+              break;
+          }
+
+          // Register that this field is displayed to the visitor.
+          if ($visitor) {
+            $exposed[$handlertype][] = $handlerid;
+          }
+
+          // Read the default value from the pane configuration.
+          if ($pane && $handlertype === 'filters') {
+            $key = $handlerinfo['valuekey'];
+            $exposed['values'][$key] = isset($conf['exposed'][$key]) ? $conf['exposed'][$key] : '';
+
+            if (!empty($handlerinfo['operatorkey'])) {
+              $operatorkey = $handlerinfo['operatorkey'];
+              $exposed['values'][$operatorkey] = isset($conf['exposed'][$operatorkey]) ? $conf['exposed'][$operatorkey] : '';
+            }
+
+            // Substitute keywords, if possible.
+            foreach ($exposed['values'] as $filter_key => $filter_value) {
+              if (is_string($filter_value) && !empty($filter_value)) {
+                $exposed['values'][$filter_key] = ctools_context_keyword_substitute($filter_value, array(), $contexts);
+              }
+            }
+          }
         }
       }
-      $viewconf['set_exposed_input'] = $conf['exposed'];
+
+      // Process sorts.
+      $overrides = $this->get_option('exposed_form_overrides');
+      if (!empty($overrides['sorts']) && isset($conf['exposed']['sort_by'])) {
+        $exposed['values']['sort_by'] = $conf['exposed']['sort_by'];
+        $exposed['values']['sort_order'] = $conf['exposed']['sort_order'];
+      }
+
+      $viewconf['exposed'] = $exposed;
     }
-    
+
     if (!empty($options)) {
       $viewconf['options'] = $options;
     }
 
     return $viewconf;
+  }
+
+  /**
+   * Retrieve information about exposed filters.
+   *
+   * @return array
+   */
+  public function get_exposed_handler_info() {
+    $overrides = $this->get_option('exposed_form_overrides');
+
+    $filters = array();
+
+    foreach (array('filters', 'sorts') as $handler_type) {
+      $filters[$handler_type] = array();
+
+      foreach ($this->get_option($handler_type) as $filter_id => $filter_info) {
+        if (empty($filter_info['exposed'])) {
+          continue;
+        }
+
+        $filter_title = $filter_id;
+        if (isset($filter_info['expose']['label'])) {
+          $filter_title = $filter_info['expose']['label'];
+        }
+        if (!empty($filter_info['is_grouped']) && isset($filter_info['group_info']['label'])) {
+          $filter_title = $filter_info['group_info']['label'];
+        }
+        if (!empty($filter_info['ui_name'])) {
+          $filter_title = $filter_info['ui_name'];
+        }
+        
+        $filter = array(
+          'title' => $filter_title,
+          'expose_status' => isset($overrides[$handler_type][$filter_id]) ? $overrides[$handler_type][$filter_id] : '',
+          'valuekey' => NULL,
+          'operatorkey' => NULL,
+          'infokey' => $filter_id,
+        );
+
+        if ($handler_type === 'filters') {
+          if (!empty($filter_info['is_grouped'])) {
+            $filter['valuekey'] = $filter_info['group_info']['identifier'];
+            $filter['infokey'] = $filter['valuekey'];
+          }
+          else {
+            $filter['valuekey'] = $filter_info['expose']['identifier'];
+            if (!empty($filter_info['expose']['use_operator'])) {
+              $filter['operatorkey'] = $filter_info['expose']['operator_id'];
+            }
+          }
+        }
+
+        $filters[$handler_type][$filter_id] = $filter;
+      }
+    }
+
+    return $filters;
   }
 
 }
