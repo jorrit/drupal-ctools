@@ -504,10 +504,6 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
       }
     }
 
-    if (isset($viewconf['get_total_rows'])) {
-      $this->view->get_total_rows = $viewconf['get_total_rows'];
-    }
-
     foreach ($viewconf as $key => $value) {
       if (strncmp('set_', $key, 4) === 0) {
         call_user_func(array($this->view, $key), $value);
@@ -652,9 +648,9 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
         if ($allow['more_text'] && !empty($conf['more_text'])) {
           $options['use_more_text'] = ctools_context_keyword_substitute($conf['more_text'], array(), $contexts);
         }
-        // make sure the view runs the count query so we know whether or not the
-        // more link applies.
-        $viewconf['get_total_rows'] = TRUE;
+        if (isset($conf['more_link_always'])) {
+          $options['use_more_always'] = $conf['more_link_always'];
+        }
       }
     }
 

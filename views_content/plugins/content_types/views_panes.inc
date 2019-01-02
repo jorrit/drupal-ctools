@@ -268,7 +268,17 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
   if ($allow['more_link']) {
     $form['more_link'] = array(
       '#type' => 'checkbox',
-      '#default_value' => isset($conf['more_link']) ? $conf['more_link'] : $view->display_handler->get_option('use_more'), '#title' => t('Provide a "more" link.'),
+      '#default_value' => isset($conf['more_link']) ? $conf['more_link'] : $view->display_handler->get_option('use_more'),
+      '#title' => t('Provide a "more" link.'),
+    );
+    $form['more_link_always'] = array(
+      '#type' => 'checkbox',
+      '#default_value' => isset($conf['more_link_always']) ? $conf['more_link_always'] : $view->display_handler->get_option('use_more_always'),
+      '#title' => t("Display 'more' link only if there is more content"),
+      '#description' => t("Leave this unchecked to display the 'more' link even if there are no more items to display."),
+      '#dependency' => array(
+        'edit-more-link' => array(TRUE),
+      ),
     );
   }
   if ($allow['more_text']) {
@@ -277,6 +287,9 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
       '#default_value' => isset($conf['more_text']) ? $conf['more_text'] : '',
       '#title' => t('Override "more" text'),
       '#description' => t('Leave blank to use the default text: "@more"', array('@more' => $view->display_handler->use_more_text())),
+      '#dependency' => array(
+        'edit-more-link' => array(TRUE),
+      ),
     );
   }
 
@@ -503,9 +516,22 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
  */
 function views_content_views_panes_content_type_edit_form_submit(&$form, &$form_state) {
   // Copy everything from our defaults.
-  $keys = array('link_to_view', 'more_link', 'more_text', 'feed_icons', 'use_pager',
-    'pager_id', 'items_per_page', 'offset', 'path_override', 'path', 'arguments',
-    'fields_override', 'exposed', 'show_exposed_form',
+  $keys = array(
+    'link_to_view',
+    'more_link',
+    'more_link_always',
+    'more_text',
+    'feed_icons',
+    'use_pager',
+    'pager_id',
+    'items_per_page',
+    'offset',
+    'path_override',
+    'path',
+    'arguments',
+    'fields_override',
+    'exposed',
+    'show_exposed_form',
   );
 
   foreach ($keys as $key) {
