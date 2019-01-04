@@ -588,7 +588,7 @@
       $('body').unbind( 'keypress', modalEventHandler );
       $('body').unbind( 'keydown', modalTabTrapHandler );
       $('.close', $modalHeader).unbind('click', modalContentClose);
-      $('body').unbind('keypress', modalEventEscapeCloseHandler);
+      $(document).unbind('keydown', modalEventEscapeCloseHandler);
       $(document).trigger('CToolsDetachBehaviors', $('#modalContent'));
 
       // Set our animation parameters and use them
