@@ -378,7 +378,7 @@
       }
     }
 
-    if (!speed) {
+    if (!speed && 0 !== speed) {
       speed = 'fast';
     }
 
