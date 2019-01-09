@@ -40,6 +40,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
       ),
     );
 
+    $options['exposed_form_overrides'] = array();
     $options['argument_input'] = array('default' => array());
     $options['link_to_view'] = array('default' => 0);
     $options['inherit_panels_path'] = array('default' => 0);
@@ -732,11 +733,11 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
           // Read the default value from the pane configuration.
           if ($pane && $handlertype === 'filters') {
             $key = $handlerinfo['valuekey'];
-            $exposed['values'][$key] = isset($conf['exposed'][$key]) ? $conf['exposed'][$key] : '';
+            $exposed['values'][$key] = isset($conf['exposed'][$key]) ? $conf['exposed'][$key] : NULL;
 
             if (!empty($handlerinfo['operatorkey'])) {
               $operatorkey = $handlerinfo['operatorkey'];
-              $exposed['values'][$operatorkey] = isset($conf['exposed'][$operatorkey]) ? $conf['exposed'][$operatorkey] : '';
+              $exposed['values'][$operatorkey] = isset($conf['exposed'][$operatorkey]) ? $conf['exposed'][$operatorkey] : NULL;
             }
 
             // Substitute keywords, if possible.

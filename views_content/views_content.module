@@ -356,7 +356,7 @@ function views_content_form_views_exposed_form_alter_remove_access($form, $form_
     }
 
     // Check if the filter is hidden via the 'Allow' settings or via the pane configuration form.
-    if (!in_array($filter_id, $viewconf['exposed']['filters'])) {
+    if (empty($viewconf['exposed']['filters']) || !in_array($filter_id, $viewconf['exposed']['filters'])) {
       $valuekey = $handlerinfos['filters'][$filter_id]['valuekey'];
       $operatorkey = $handlerinfos['filters'][$filter_id]['operatorkey'];
       $infokey = $handlerinfos['filters'][$filter_id]['infokey'];
