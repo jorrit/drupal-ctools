@@ -646,13 +646,14 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
       }
       else {
         $options['use_more'] = TRUE;
-        if ($allow['more_text'] && !empty($conf['more_text'])) {
-          $options['use_more_text'] = ctools_context_keyword_substitute($conf['more_text'], array(), $contexts);
-        }
         if (isset($conf['more_link_always'])) {
           $options['use_more_always'] = $conf['more_link_always'];
         }
       }
+    }
+
+    if ($allow['more_text'] && !empty($conf['more_text'])) {
+      $options['use_more_text'] = ctools_context_keyword_substitute($conf['more_text'], array(), $contexts);
     }
 
     if ($allow['items_per_page'] && isset($conf['items_per_page'])) {
@@ -691,7 +692,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
       $viewconf['show_exposed_form'] = !empty($conf['show_exposed_form']);
     }
 
-    if ($allow['exposed_form'] && !empty($conf['exposed'])) {
+    if ($allow['exposed_form']) {
       $exposed = array(
         'filters' => array(),
         'sorts' => array(),

@@ -287,9 +287,6 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
       '#default_value' => isset($conf['more_text']) ? $conf['more_text'] : '',
       '#title' => t('Override "more" text'),
       '#description' => t('Leave blank to use the default text: "@more"', array('@more' => $view->display_handler->use_more_text())),
-      '#dependency' => array(
-        'edit-more-link' => array(TRUE),
-      ),
     );
   }
 
