@@ -555,7 +555,7 @@
     // Create our content div, get the dimensions, and hide it
     var modalContent = $('#modalContent').css('top','-1000px');
     var $modalHeader = modalContent.find('.modal-header');
-    var mdcTop = wt + ( winHeight / 2 ) - (  modalContent.outerHeight() / 2);
+    var mdcTop = wt + Math.max((winHeight / 2) - (modalContent.outerHeight() / 2), 0);
     var mdcLeft = ( winWidth / 2 ) - ( modalContent.outerWidth() / 2);
     $('#modalBackdrop').css(css).css('top', 0).css('height', docHeight + 'px').css('width', docWidth + 'px').show();
     modalContent.css({top: mdcTop + 'px', left: mdcLeft + 'px'}).hide()[animation](speed);
@@ -640,7 +640,7 @@
 
       // Get where we should move content to
       var modalContent = $('#modalContent');
-      var mdcTop = wt + ( winHeight / 2 ) - ( modalContent.outerHeight() / 2);
+      var mdcTop = wt + Math.max((winHeight / 2) - (modalContent.outerHeight() / 2), 0);
       var mdcLeft = ( winWidth / 2 ) - ( modalContent.outerWidth() / 2);
 
       // Apply the changes
