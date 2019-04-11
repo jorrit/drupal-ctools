@@ -479,7 +479,7 @@ function ctools_uuid_generate() {
   if (!module_exists('uuid')) {
     ctools_include('uuid');
 
-    $callback = drupal_static(__FUNCTION__);
+    $callback = &drupal_static(__FUNCTION__);
 
     if (empty($callback)) {
       if (function_exists('uuid_create') && !function_exists('uuid_make')) {
