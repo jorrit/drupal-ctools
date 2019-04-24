@@ -118,6 +118,14 @@ function views_content_exposed_form_pane_render($subtype, $conf, $panel_args, $c
 
       $view->set_display($display_id);
       if (isset($view->display_handler)) {
+        // Make sure views_content_plugin_display_panel_pane->displays_exposed() returns TRUE for exposed forms in blocks.
+        if ($view->display_handler instanceof views_content_plugin_display_panel_pane) {
+          $conf['pane_contexts'] = $contexts;
+          $conf['panel_args'] = $panel_args;
+          $conf['show_exposed_form'] = TRUE;
+          $view->display_handler->set_pane_conf($conf);
+        }
+
         $block = (object) $view->display_handler->view_special_blocks($type);
         return $block;
       }
