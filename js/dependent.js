@@ -87,7 +87,7 @@
         }
 
         var getValue = function(item, trigger) {
-          if ($(trigger).size() == 0) {
+          if ($(trigger).length == 0) {
             return null;
           }
 
