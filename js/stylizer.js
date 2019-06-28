@@ -21,7 +21,7 @@
 
     // Decode reference colors to HSL
   /*var reference = Drupal.settings.Stylizer.reference.clone();
-    for (i in reference) {
+    for (var i in reference) {
       reference[i] = farb.RGBToHSL(farb.unpack(reference[i]));
     } */
 
@@ -30,7 +30,7 @@
       var colors = this.options[this.selectedIndex].value;
       if (colors != '') {
         colors = colors.split(',');
-        for (i in colors) {
+        for (var i in colors) {
           callback(inputs[i], colors[i], false, true);
         }
       }
