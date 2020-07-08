@@ -118,6 +118,14 @@ function views_content_exposed_form_pane_render($subtype, $conf, $panel_args, $c
 
       $view->set_display($display_id);
       if (isset($view->display_handler)) {
+        // Make sure views_content_plugin_display_panel_pane->displays_exposed() returns TRUE for exposed forms in blocks.
+        if ($view->display_handler instanceof views_content_plugin_display_panel_pane) {
+          $conf['pane_contexts'] = $contexts;
+          $conf['panel_args'] = $panel_args;
+          $conf['show_exposed_form'] = TRUE;
+          $view->display_handler->set_pane_conf($conf);
+        }
+
         $block = (object) $view->display_handler->view_special_blocks($type);
         return $block;
       }
@@ -294,4 +302,105 @@ function views_content_get_pane_links_alter(&$links, $pane, $content_type) {
       'href' => url('admin/structure/views/view/' . $view_name . '/edit/' . $display_name, array('query' => $destination, 'absolute' => TRUE)),
     );
   }
+}
+
+/**
+ * Implements hook_module_implements_alter()
+ */
+function views_content_module_implements_alter(&$implementations, $hook) {
+  if ($hook == 'views_pre_view') {
+    $group = $implementations['views_content'];
+    unset($implementations['views_content']);
+    $implementations = array('views_content' => $group) + $implementations;
+  }
+}
+
+/**
+ * Implements hook_views_pre_view()
+ */
+function views_content_views_pre_view(&$view) {
+  if ($view->display_handler instanceof views_content_plugin_display_panel_pane) {
+    // process the pane configuration to prevent loss when using ajax
+    $view->display_handler->load_view_conf();
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function views_content_form_views_exposed_form_alter(&$form, $form_state) {
+  $view = $form_state['view'];
+  if ($view->display_handler instanceof views_content_plugin_display_panel_pane) {
+    if ($overrides = $view->display_handler->get_option('exposed_form_overrides') && $view->display_handler->view_pane_conf) {
+      $form['#after_build'][] = 'views_content_form_views_exposed_form_alter_remove_access';
+    }
+  }
+}
+
+/**
+ * Removes any fields that are pane configuration only.
+ *
+ * In after build as if did it in form alter, the values are not proccessed.
+ */
+function views_content_form_views_exposed_form_alter_remove_access($form, $form_state) {
+  $view = $form_state['view'];
+  /* @var views_content_plugin_display_panel_pane $displayhandler */
+  $displayhandler = $view->display_handler;
+  $allow = $displayhandler->get_option('allow');
+  if (!$allow['exposed_form']) {
+    return $form;
+  }
+
+  $filters = $displayhandler->get_option('filters');
+  $overrides = $displayhandler->get_option('exposed_form_overrides');
+  $viewconf = $displayhandler->view_pane_conf;
+  $handlerinfos = $displayhandler->get_exposed_handler_info();
+  $using_form = FALSE;
+
+  foreach ($filters as $filter_id => $filter) {
+    // Skip filters that are not exposed.
+    if (empty($filter['exposed'])) {
+      continue;
+    }
+
+    // Check if the filter is hidden via the 'Allow' settings or via the pane configuration form.
+    if (empty($viewconf['exposed']['filters']) || !in_array($filter_id, $viewconf['exposed']['filters'])) {
+      $valuekey = $handlerinfos['filters'][$filter_id]['valuekey'];
+      $operatorkey = $handlerinfos['filters'][$filter_id]['operatorkey'];
+      $infokey = $handlerinfos['filters'][$filter_id]['infokey'];
+      $form[$valuekey]['#access'] = FALSE;
+      unset($form['#info']['filter-' . $infokey]);
+      if (isset($form[$operatorkey])) {
+        $form[$operatorkey]['#access'] = FALSE;
+      }
+    }
+    else {
+      $using_form = TRUE;
+    }
+  }
+
+  // Only provide sort options if configured to.
+  if (!empty($form['sort_by']['#options']) && isset($overrides['sorts'])) {
+    $form['sort_by']['#options'] = array_intersect_key($form['sort_by']['#options'], array_filter($overrides['sorts']));
+    $count = count($form['sort_by']['#options']);
+    if ($count === 1) {
+      $form['sort_by']['#access'] = FALSE;
+      $form['sort_by']['#value'] = key($form['sort_by']['#options']);
+    }
+    elseif ($count === 0) {
+      unset($form['sort_by']['#value']);
+      $form['sort_by']['#access'] = FALSE;
+      $form['sort_order']['#access'] = FALSE;
+    }
+    else {
+      $using_form = TRUE;
+    }
+  }
+
+  // If we have nerfed all of the filters then kill the submit as well.
+  if (!$using_form) {
+    $form['#access'] = FALSE;
+  }
+
+  return $form;
 }

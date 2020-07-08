@@ -9,8 +9,8 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    * this variable so that other modules can create alternate pane displays.
    */
   public $panel_pane_display = TRUE;
-  public $has_pane_conf = NULL;
 
+  public $view_pane_conf = NULL;
 
   public function option_definition() {
     $options = parent::option_definition();
@@ -31,13 +31,16 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
         'offset'          => array('default' => FALSE),
         'link_to_view'    => array('default' => FALSE),
         'more_link'       => array('default' => FALSE),
+        'more_text'       => array('default' => FALSE),
         'path_override'   => array('default' => FALSE),
         'title_override'  => array('default' => FALSE),
         'exposed_form'    => array('default' => FALSE),
+        'exposed_form_configure' => array('default' => FALSE),
         'fields_override' => array('default' => FALSE),
       ),
     );
 
+    $options['exposed_form_overrides'] = array();
     $options['argument_input'] = array('default' => array());
     $options['link_to_view'] = array('default' => 0);
     $options['inherit_panels_path'] = array('default' => 0);
@@ -45,15 +48,21 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     return $options;
   }
 
-
-  public function has_pane_conf() {
-    return isset($this->has_pane_conf);
-  }
-
-
+  /**
+   * Set the pane configuration. This happens when the pane is initially
+   * displayed.
+   *
+   * This method converts the pane configuration to views configuration and
+   * caches this configuration in order to apply it on AJAX requests for this
+   * view.
+   *
+   * @param array $conf
+   */
   public function set_pane_conf($conf = array()) {
-    $this->set_option('pane_conf', $conf);
-    $this->has_pane_conf = TRUE;
+    $viewconf = $this->build_views_conf_from_pane_conf($conf);
+    $this->view_pane_conf = $viewconf;
+    $this->view->dom_id = !empty($this->view->dom_id) ? $this->view->dom_id : md5($this->view->name . serialize($viewconf));
+    cache_set('view_panel_pane:' . $this->view->dom_id, $viewconf, 'cache_panel_conf');
   }
 
   /**
@@ -167,9 +176,11 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
           'offset' => t('Pager offset'),
           'link_to_view' => t('Link to view'),
           'more_link' => t('More link'),
+          'more_text' => t('More text'),
           'path_override' => t('Path override'),
           'title_override' => t('Title override'),
           'exposed_form' => t('Use exposed widgets form as pane configuration'),
+          'exposed_form_configure' => t('Show Exposed Form'),
           'fields_override' => t('Fields override'),
         );
 
@@ -179,6 +190,46 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
           '#default_value' => $allow,
           '#options' => $options,
         );
+
+        $form['exposed_form_overrides'] = array(
+          '#type' => 'fieldset',
+          '#title' => t('Exposed Form Filter Visibility'),
+          '#tree' => TRUE,
+          '#description' => t('Allows customizing which filters show up as pane configuration vs. exposed form.'),
+          '#states' => array(
+            'visible' => array(
+              ':input[name="allow[exposed_form]"]' => array('checked' => TRUE),
+            ),
+          ),
+        );
+
+        $handlerinfos = $this->get_exposed_handler_info();
+        foreach (array('filters' => t('Filters'), 'sorts' => t('Sorts')) as $type => $label) {
+          $options = array(
+            '' => t('Pane configuration form only'),
+            'pane_and_exposed' => t('Pane configuration form and exposed form'),
+            'configureable' => t('Pane configuration form and option for exposed form'),
+            'exposed' => t('Exposed form only'),
+          );
+
+          if ($type === 'sorts') {
+            unset($options['configureable']);
+          }
+          
+          foreach ($handlerinfos[$type] as $handlerid => $handlerinfo) {
+            $form['exposed_form_overrides'][$type][$handlerid] = array(
+              '#type' => 'select',
+              '#title' => check_plain($handlerinfo['title']),
+              '#options' => $options,
+              '#default_value' => $handlerinfo['expose_status'],
+            );
+          }
+
+          if (!empty($form['exposed_form_overrides'][$type])) {
+            $form['exposed_form_overrides'][$type]['#type'] = 'fieldset';
+            $form['exposed_form_overrides'][$type]['#title'] = $label;
+          }
+        }
         break;
 
       case 'pane_title':
@@ -327,6 +378,7 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     parent::options_submit($form, $form_state);
     switch ($form_state['section']) {
       case 'allow':
+        $this->set_option('exposed_form_overrides', $form_state['values']['exposed_form_overrides']);
       case 'argument_input':
       case 'link_to_view':
       case 'inherit_panels_path':
@@ -372,17 +424,6 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     return $output;
   }
 
-
-  public function use_more() {
-    $allow = $this->get_option('allow');
-    if (!$allow['more_link'] || !$this->has_pane_conf()) {
-      return parent::use_more();
-    }
-    $conf = $this->get_option('pane_conf');
-    return (bool) $conf['more_link'];
-  }
-
-
   public function get_path() {
     if (empty($this->view->override_path)) {
       return parent::get_path();
@@ -390,14 +431,12 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
     return $this->view->override_path;
   }
 
-
   public function get_url() {
     if ($this->get_option('inherit_panels_path')) {
       return $this->get_path();
     }
     return parent::get_url();
   }
-
 
   public function uses_exposed_form_in_block() {
     // We'll always allow the exposed form in a block, regardless of path.
@@ -414,10 +453,376 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
    * displayed unless uses_exposed() returns TRUE.
    */
   public function displays_exposed() {
-    $conf = $this->get_option('allow');
-    // If this is set, the exposed form is part of pane configuration, not
-    // rendered normally.
-    return empty($conf['exposed_form']);
+    $viewconf = $this->view_pane_conf;
+
+    // Allow individual panes to disable exposed form.
+    if (isset($viewconf['show_exposed_form']) && !$viewconf['show_exposed_form']) {
+      return FALSE;
+    }
+
+    $allow = $this->get_option('allow');
+    // If exposed_form is set, the exposed form is part of pane configuration,
+    // not rendered normally.
+    if (!$allow['exposed_form']) {
+      return TRUE;
+    }
+
+    // If any exposed filter is visible, display the form.
+    return !empty($viewconf['exposed']['filters']) || !empty($viewconf['exposed']['sorts']);
+  }
+
+  /**
+   * Load the view conf from cache and apply it to the view.
+   *
+   * If the view conf is already loaded, apply it.
+   */
+  public function load_view_conf() {
+    if (empty($this->view_pane_conf)) {
+      if (empty($this->view->dom_id) || !($cache = cache_get('view_panel_pane:' . $this->view->dom_id, 'cache_panel_conf'))) {
+        return;
+      }
+      $this->view_pane_conf = $cache->data;
+    }
+
+    if (!empty($this->view_pane_conf)) {
+      $this->apply_view_conf();
+    }
+  }
+
+  /**
+   * Apply $this->view_pane_conf to the view.
+   */
+  private function apply_view_conf() {
+    $viewconf = $this->view_pane_conf;
+
+    if (isset($viewconf['override_path'])) {
+      $this->view->override_path = $viewconf['override_path'];
+    }
+
+    if (!empty($viewconf['options'])) {
+      foreach ($viewconf['options'] as $optionkey => $optionvalue) {
+        $this->set_option($optionkey, $optionvalue);
+      }
+    }
+
+    foreach ($viewconf as $key => $value) {
+      if (strncmp('set_', $key, 4) === 0) {
+        call_user_func(array($this->view, $key), $value);
+      }
+    }
+
+    if (isset($viewconf['fields_override'])) {
+      $fields = $this->view->get_items('field');
+      foreach ($fields as $field => $field_display) {
+        $fields[$field]['exclude'] = empty($viewconf['fields_override'][$field]);
+      }
+      $this->set_option('fields', $fields);
+    }
+
+    if (isset($viewconf['exposed'])) {
+      $exposed_input = $viewconf['exposed']['values'];
+      $current_exposed = $this->view->get_exposed_input();
+
+      // Load user input.
+      if (!empty($current_exposed)) {
+        // Load user input for exposed filters.
+        if (!empty($viewconf['exposed']['filters'])) {
+          $handlerinfos = $this->get_exposed_handler_info();
+          foreach ($viewconf['exposed']['filters'] as $filter_id) {
+            // Copy the user input value.
+            $valuekey = $handlerinfos['filters'][$filter_id]['valuekey'];
+            if (isset($current_exposed[$valuekey])) {
+              $exposed_input[$valuekey] = $current_exposed[$valuekey];
+            }
+
+            // Copy the user input operator, if allowed.
+            if (!empty($handlerinfos['filters'][$filter_id]['operatorkey'])) {
+              $operatorkey = $handlerinfos['filters'][$filter_id]['operatorkey'];
+              if (isset($current_exposed[$operatorkey])) {
+                $exposed_input[$operatorkey] = $current_exposed[$operatorkey];
+              }
+            }
+          }
+        }
+
+        // Override configured values with input from exposed form.
+        if (!empty($viewconf['exposed']['sorts']) && isset($current_exposed['sort_by'])) {
+          $exposed_input['sort_by'] = $current_exposed['sort_by'];
+          $exposed_input['sort_order'] = $current_exposed['sort_order'];
+        }
+
+        // Preserve op so reset works.
+        if (isset($current_exposed['op'])) {
+          $exposed_input['op'] = $current_exposed['op'];
+        }
+      }
+
+      $this->view->set_exposed_input($exposed_input);
+    }
+  }
+
+  private function build_views_conf_from_pane_conf($conf) {
+    ctools_include('context');
+
+    $viewconf = array();
+    $options = array();
+
+    $contexts = $conf['pane_contexts'];
+    $args = array();
+    $arguments = $this->get_option('arguments');
+
+    $context_keys = isset($conf['context']) ? $conf['context'] : array();
+    foreach ($this->get_argument_input() as $id => $argument) {
+      switch ($argument['type']) {
+        case 'context':
+          $key = array_shift($context_keys);
+          if (isset($contexts[$key])) {
+            if (strpos($argument['context'], '.')) {
+              list($context, $converter) = explode('.', $argument['context'], 2);
+              $args[] = ctools_context_convert_context($contexts[$key], $converter, array('sanitize' => FALSE));
+            }
+            else {
+              $args[] = $contexts[$key]->argument;
+            }
+          }
+          else {
+            $args[] = isset($arguments[$id]['exception']['value']) ? $arguments[$id]['exception']['value'] : 'all';
+          }
+          break;
+
+        case 'fixed':
+          $args[] = $argument['fixed'];
+          break;
+
+        case 'panel':
+          $args[] = isset($conf['panel_args'][$argument['panel']]) ? $conf['panel_args'][$argument['panel']] : NULL;
+          break;
+
+        case 'user':
+          $args[] = (isset($conf['arguments'][$id]) && $conf['arguments'][$id] !== '') ? ctools_context_keyword_substitute($conf['arguments'][$id], array(), $contexts) : NULL;
+          break;
+
+        case 'wildcard':
+          // Put in the wildcard.
+          $args[] = isset($arguments[$id]['wildcard']) ? $arguments[$id]['wildcard'] : '*';
+          break;
+
+        case 'none':
+        default:
+          // Put in NULL.
+          // views.module knows what to do with NULL (or missing) arguments
+          $args[] = NULL;
+          break;
+      }
+    }
+
+    // remove any trailing NULL arguments as these are non-args:
+    while (count($args) && end($args) === NULL) {
+      array_pop($args);
+    }
+
+    $viewconf['set_arguments'] = $args;
+
+    $allow = $this->get_option('allow');
+
+    if ($allow['path_override'] && !empty($conf['path'])) {
+      $viewconf['override_path'] = ctools_context_keyword_substitute($conf['path'], array(), $contexts);
+    }
+    else {
+      if ($path = $this->get_option('inherit_panels_path')) {
+        if (drupal_is_front_page()) {
+          $viewconf['override_path'] = '';
+        }
+        else {
+          $viewconf['override_path'] = $_GET['q'];
+        }
+      }
+    }
+
+    // more link
+    if ($allow['more_link']) {
+      if (empty($conf['more_link'])) {
+        $options['use_more'] = FALSE;
+      }
+      else {
+        $options['use_more'] = TRUE;
+        if (isset($conf['more_link_always'])) {
+          $options['use_more_always'] = $conf['more_link_always'];
+        }
+      }
+    }
+
+    if ($allow['more_text'] && !empty($conf['more_text'])) {
+      $options['use_more_text'] = ctools_context_keyword_substitute($conf['more_text'], array(), $contexts);
+    }
+
+    if ($allow['items_per_page'] && isset($conf['items_per_page'])) {
+      $viewconf['set_items_per_page'] = $conf['items_per_page'];
+    }
+
+    if ($allow['offset']) {
+      $viewconf['set_offset'] = $conf['offset'];
+    }
+
+    if ($allow['use_pager']) {
+      // Only set use_pager if they differ, this way we can avoid overwriting the
+      // pager type that Views uses.
+      $pager = $this->get_option('pager');
+      if ($conf['use_pager'] && ($pager['type'] == 'none' || $pager['type'] == 'some')) {
+        $pager['type'] = 'full';
+      }
+      elseif (!$conf['use_pager'] && $pager['type'] != 'none' && $pager['type'] != 'some') {
+        $pager['type'] = $this->view->get_items_per_page() || !empty($pager['options']['items_per_page']) ? 'some' : 'none';
+      }
+
+      if ($conf['use_pager']) {
+        if (!isset($pager['options']['id']) || (isset($conf['pager_id']) && $pager['options']['id'] != $conf['pager_id'])) {
+          $pager['options']['id'] = (int) $conf['pager_id'];
+        }
+      }
+
+      $options['pager'] = $pager;
+    }
+
+    if ($allow['fields_override'] && $conf['fields_override']) {
+      $viewconf['fields_override'] = array_filter($conf['fields_override']);
+    }
+
+    if ($allow['exposed_form_configure']) {
+      $viewconf['show_exposed_form'] = !empty($conf['show_exposed_form']);
+    }
+
+    if ($allow['exposed_form']) {
+      $exposed = array(
+        'filters' => array(),
+        'sorts' => array(),
+        'values' => array(),
+      );
+
+      // Process filter configuration.
+      $handlerinfos = $this->get_exposed_handler_info();
+      foreach ($handlerinfos as $handlertype => $handlertypeinfos) {
+        foreach ($handlertypeinfos as $handlerid => $handlerinfo) {
+          $visitor = FALSE;
+          $pane = FALSE;
+
+          switch ($handlerinfo['expose_status']) {
+            case '':
+              $pane = TRUE;
+              break;
+
+            case 'pane_and_exposed':
+              $visitor = TRUE;
+              $pane = TRUE;
+              break;
+
+            case 'exposed':
+              $visitor = TRUE;
+              break;
+
+            case 'configureable':
+              $visitor = !empty($conf['exposed']['filter-' . $handlerid]['expose_to_visitor']);
+              $pane = TRUE;
+              break;
+          }
+
+          // Register that this field is displayed to the visitor.
+          if ($visitor) {
+            $exposed[$handlertype][] = $handlerid;
+          }
+
+          // Read the default value from the pane configuration.
+          if ($pane && $handlertype === 'filters') {
+            $key = $handlerinfo['valuekey'];
+            $exposed['values'][$key] = isset($conf['exposed'][$key]) ? $conf['exposed'][$key] : NULL;
+
+            if (!empty($handlerinfo['operatorkey'])) {
+              $operatorkey = $handlerinfo['operatorkey'];
+              $exposed['values'][$operatorkey] = isset($conf['exposed'][$operatorkey]) ? $conf['exposed'][$operatorkey] : NULL;
+            }
+
+            // Substitute keywords, if possible.
+            foreach ($exposed['values'] as $filter_key => $filter_value) {
+              if (is_string($filter_value) && !empty($filter_value)) {
+                $exposed['values'][$filter_key] = ctools_context_keyword_substitute($filter_value, array(), $contexts);
+              }
+            }
+          }
+        }
+      }
+
+      // Process sorts.
+      $overrides = $this->get_option('exposed_form_overrides');
+      if (!empty($overrides['sorts']) && isset($conf['exposed']['sort_by'])) {
+        $exposed['values']['sort_by'] = $conf['exposed']['sort_by'];
+        $exposed['values']['sort_order'] = $conf['exposed']['sort_order'];
+      }
+
+      $viewconf['exposed'] = $exposed;
+    }
+
+    if (!empty($options)) {
+      $viewconf['options'] = $options;
+    }
+
+    return $viewconf;
+  }
+
+  /**
+   * Retrieve information about exposed filters.
+   *
+   * @return array
+   */
+  public function get_exposed_handler_info() {
+    $overrides = $this->get_option('exposed_form_overrides');
+
+    $filters = array();
+
+    foreach (array('filters', 'sorts') as $handler_type) {
+      $filters[$handler_type] = array();
+
+      foreach ($this->get_option($handler_type) as $filter_id => $filter_info) {
+        if (empty($filter_info['exposed'])) {
+          continue;
+        }
+
+        $filter_title = $filter_id;
+        if (isset($filter_info['expose']['label'])) {
+          $filter_title = $filter_info['expose']['label'];
+        }
+        if (!empty($filter_info['is_grouped']) && isset($filter_info['group_info']['label'])) {
+          $filter_title = $filter_info['group_info']['label'];
+        }
+        if (!empty($filter_info['ui_name'])) {
+          $filter_title = $filter_info['ui_name'];
+        }
+        
+        $filter = array(
+          'title' => $filter_title,
+          'expose_status' => isset($overrides[$handler_type][$filter_id]) ? $overrides[$handler_type][$filter_id] : '',
+          'valuekey' => NULL,
+          'operatorkey' => NULL,
+          'infokey' => $filter_id,
+        );
+
+        if ($handler_type === 'filters') {
+          if (!empty($filter_info['is_grouped'])) {
+            $filter['valuekey'] = $filter_info['group_info']['identifier'];
+            $filter['infokey'] = $filter['valuekey'];
+          }
+          else {
+            $filter['valuekey'] = $filter_info['expose']['identifier'];
+            if (!empty($filter_info['expose']['use_operator'])) {
+              $filter['operatorkey'] = $filter_info['expose']['operator_id'];
+            }
+          }
+        }
+
+        $filters[$handler_type][$filter_id] = $filter;
+      }
+    }
+
+    return $filters;
   }
 
 }

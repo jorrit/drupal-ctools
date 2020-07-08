@@ -143,79 +143,11 @@ function views_content_views_panes_content_type_render($subtype, $conf, $panel_a
     return;
   }
 
+  $conf['pane_contexts'] = $contexts;
+  $conf['panel_args'] = $panel_args;
   $view->display_handler->set_pane_conf($conf);
 
-  $args = array();
-  $arguments = $view->display_handler->get_option('arguments');
-
-  $context_keys = isset($conf['context']) ? $conf['context'] : array();
-  foreach ($view->display_handler->get_argument_input() as $id => $argument) {
-    switch ($argument['type']) {
-      case 'context':
-        $key = array_shift($context_keys);
-        if (isset($contexts[$key])) {
-          if (strpos($argument['context'], '.')) {
-            list($context, $converter) = explode('.', $argument['context'], 2);
-            $args[] = ctools_context_convert_context($contexts[$key], $converter, array('sanitize' => FALSE));
-          }
-          else {
-            $args[] = $contexts[$key]->argument;
-          }
-        }
-        else {
-          $args[] = isset($arguments[$id]['exception']['value']) ? $arguments[$id]['exception']['value'] : 'all';
-        }
-        break;
-
-      case 'fixed':
-        $args[] = $argument['fixed'];
-        break;
-
-      case 'panel':
-        $args[] = isset($panel_args[$argument['panel']]) ? $panel_args[$argument['panel']] : NULL;
-        break;
-
-      case 'user':
-        $args[] = (isset($conf['arguments'][$id])  && $conf['arguments'][$id] !== '') ? ctools_context_keyword_substitute($conf['arguments'][$id], array(), $contexts) : NULL;
-        break;
-
-      case 'wildcard':
-        // Put in the wildcard.
-        $args[] = isset($arguments[$id]['wildcard']) ? $arguments[$id]['wildcard'] : '*';
-        break;
-
-      case 'none':
-      default:
-        // Put in NULL.
-        // views.module knows what to do with NULL (or missing) arguments.
-        $args[] = NULL;
-        break;
-    }
-  }
-
-  // Remove any trailing NULL arguments as these are non-args:
-  while (count($args) && end($args) === NULL) {
-    array_pop($args);
-  }
-
-  $view->set_arguments($args);
-
   $allow = $view->display_handler->get_option('allow');
-
-  if (!empty($conf['path'])) {
-    $conf['path'] = ctools_context_keyword_substitute($conf['path'], array(), $contexts);
-  }
-  if ($allow['path_override'] && !empty($conf['path'])) {
-    $view->override_path = $conf['path'];
-  }
-  elseif ($path = $view->display_handler->get_option('inherit_panels_path')) {
-    if (drupal_is_front_page()) {
-      $view->override_path = '';
-    }
-    else {
-      $view->override_path = $_GET['q'];
-    }
-  }
 
   $block = new stdClass();
   $block->module = 'views';
@@ -224,67 +156,6 @@ function views_content_views_panes_content_type_render($subtype, $conf, $panel_a
   if (($allow['link_to_view'] && !empty($conf['link_to_view'])) ||
       (!$allow['link_to_view'] && $view->display_handler->get_option('link_to_view'))) {
     $block->title_link = $view->get_url();
-  }
-
-  // More link.
-  if ($allow['more_link']) {
-    if (empty($conf['more_link'])) {
-      $view->display_handler->set_option('use_more', FALSE);
-    }
-    else {
-      $view->display_handler->set_option('use_more', TRUE);
-      // Make sure the view runs the count query so we know whether or not the
-      // more link applies.
-      $view->get_total_rows = TRUE;
-    }
-  }
-
-  if ($allow['items_per_page'] && isset($conf['items_per_page'])) {
-    $view->set_items_per_page($conf['items_per_page']);
-  }
-
-  if ($allow['offset']) {
-    $view->set_offset($conf['offset']);
-  }
-
-  if ($allow['use_pager']) {
-    // Only set use_pager if they differ, this way we can avoid overwriting the
-    // pager type that Views uses.
-    $pager = $view->display_handler->get_option('pager');
-    if ($conf['use_pager'] && ($pager['type'] == 'none' || $pager['type'] == 'some')) {
-      $pager['type'] = 'full';
-    }
-    elseif (!$conf['use_pager'] && $pager['type'] != 'none' && $pager['type'] != 'some') {
-      $pager['type'] = $view->get_items_per_page() || !empty($pager['options']['items_per_page']) ? 'some' : 'none';
-    }
-
-    if ($conf['use_pager']) {
-      if (!isset($pager['options']['id']) || (isset($conf['pager_id']) && $pager['options']['id'] != $conf['pager_id'])) {
-        $pager['options']['id'] = (int) $conf['pager_id'];
-      }
-    }
-
-    $view->display_handler->set_option('pager', $pager);
-  }
-
-  if ($allow['fields_override']) {
-    if ($conf['fields_override']) {
-      $fields = $view->get_items('field');
-      foreach ($fields as $field => $field_display) {
-        $fields[$field]['exclude'] = empty($conf['fields_override'][$field]);
-      }
-      $view->display_handler->set_option('fields', $fields);
-
-    }
-  }
-
-  if ($allow['exposed_form'] && !empty($conf['exposed'])) {
-    foreach ($conf['exposed'] as $filter_name => $filter_value) {
-      if (!is_array($filter_value)) {
-        $conf['exposed'][$filter_name] = ctools_context_keyword_substitute($filter_value, array(), $contexts);
-      }
-    }
-    $view->set_exposed_input($conf['exposed']);
   }
 
   $stored_feeds = drupal_add_feed();
@@ -333,6 +204,7 @@ function views_content_views_panes_add_defaults(&$conf, $view) {
   $conf += array(
     'link_to_view' => $view->display_handler->get_option('link_to_view'),
     'more_link' => $view->display_handler->get_option('use_more'),
+    'more_text' => $view->display_handler->get_option('more_text'),
     'feed_icons' => FALSE,
     'use_pager' => $pager['type'] != 'none' && $pager['type'] != 'some',
     'pager_id' => isset($pager['options']['id']) ? $pager['options']['id'] : 0,
@@ -397,8 +269,24 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
     $form['more_link'] = array(
       '#type' => 'checkbox',
       '#default_value' => isset($conf['more_link']) ? $conf['more_link'] : $view->display_handler->get_option('use_more'),
-      '#description' => t('The text of this link will be "@more". This setting can only be modified on the View configuration.', array('@more' => $view->display_handler->use_more_text())),
       '#title' => t('Provide a "more" link.'),
+    );
+    $form['more_link_always'] = array(
+      '#type' => 'checkbox',
+      '#default_value' => isset($conf['more_link_always']) ? $conf['more_link_always'] : $view->display_handler->get_option('use_more_always'),
+      '#title' => t("Display 'more' link only if there is more content"),
+      '#description' => t("Leave this unchecked to display the 'more' link even if there are no more items to display."),
+      '#dependency' => array(
+        'edit-more-link' => array(TRUE),
+      ),
+    );
+  }
+  if ($allow['more_text']) {
+    $form['more_text'] = array(
+      '#type' => 'textfield',
+      '#default_value' => isset($conf['more_text']) ? $conf['more_text'] : '',
+      '#title' => t('Override "more" text'),
+      '#description' => t('Leave blank to use the default text: "@more"', array('@more' => $view->display_handler->use_more_text())),
     );
   }
 
@@ -507,6 +395,8 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
   }
 
   if ($allow['exposed_form']) {
+    $overrides = $view->display_handler->get_option('exposed_form_overrides');
+
     // If the exposed form is part of pane configuration, get the exposed
     // form re-tool it for our use.
     $exposed_form_state = array(
@@ -527,35 +417,89 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
       '#tree' => TRUE,
     );
 
-    foreach ($exposed_form['#info'] as $id => $info) {
-      $form['exposed'][$id] = array(
+    $handlerinfos = $view->display_handler->get_exposed_handler_info();
+
+    foreach ($handlerinfos['filters'] as $handlerid => $handlerinfo) {
+      // Don't set this if this is set to exposed.
+      if ($handlerinfo['expose_status'] === 'exposed') {
+        continue;
+      }
+
+      $filterelement = array(
         '#type' => 'item',
         '#id' => 'views-exposed-pane',
+        '#title' => $handlerinfo['title'],
       );
 
-      if (!empty($info['label'])) {
-        $form['exposed'][$id]['#title'] = $info['label'];
+      if ($handlerinfo['expose_status'] === 'configureable') {
+        $filterelement['expose_to_visitor'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Expose to visitor'),
+          '#default_value' => !empty($conf['exposed']['filter-' . $handlerid]['expose_to_visitor']),
+        );
       }
 
-      if (!empty($info['operator']) && !empty($exposed_form[$info['operator']])) {
-        $form['exposed'][$id][$info['operator']] = $exposed_form[$info['operator']];
-        $form['exposed'][$id][$info['operator']]['#parents'] = array('exposed', $info['operator']);
-        $form['exposed'][$id][$info['operator']]['#default_value'] = isset($conf['exposed'][$info['operator']]) ? $conf['exposed'][$info['operator']] : '';
+      // Copy inputs from fake exposed form.
+      $keys = array_filter(array($handlerinfo['valuekey'], $handlerinfo['operatorkey']));
+      foreach ($keys as $key) {
+        $filterelement[$key] = $exposed_form[$key];
+        $filterelement[$key]['#parents'] = array('exposed', $key);
+        $filterelement[$key]['#default_value'] = isset($conf['exposed'][$key]) ? $conf['exposed'][$key] : '';
       }
-      $form['exposed'][$id][$info['value']] = $exposed_form[$info['value']];
-      $form['exposed'][$id][$info['value']]['#parents'] = array('exposed', $info['value']);
-      $form['exposed'][$id][$info['value']]['#default_value'] = isset($conf['exposed'][$info['value']]) ? $conf['exposed'][$info['value']] : '';
+
+      $form['exposed']['filter-' . $handlerid] = $filterelement;
+    }
+  }
+
+  // Allow individual panes to disable exposed form.
+  if (!empty($allow['exposed_form_configure'])) {
+    $has_exposed = FALSE;
+    foreach ($view->display_handler->get_option('filters') as $filter) {
+      if (!empty($filter['exposed'])) {
+        $has_exposed = TRUE;
+        break;
+      }
+    }
+    if ($has_exposed) {
+      $form['show_exposed_form'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Show Exposed Form'),
+        '#default_value' => isset($conf['show_exposed_form']) ? $conf['show_exposed_form'] : TRUE,
+      );
     }
   }
 
   // The exposed sort stuff doesn't fall into $exposed_form['#info'] so we
   // have to handle it separately.
   if (isset($exposed_form['sort_by'])) {
+    $overrides = $view->display_handler->get_option('exposed_form_overrides');
     $form['exposed']['sort_by'] = $exposed_form['sort_by'];
+    if (isset($conf['exposed']['sort_by'])) {
+      $form['exposed']['sort_by']['#default_value'] = $conf['exposed']['sort_by'];
+    }
+    if (!empty($overrides['sorts'])) {
+      foreach (array_filter($overrides['sorts']) as $id => $value) {
+        if ($value && $value === 'exposed') {
+          unset($form['exposed']['sort_by']['#options'][$id]);
+        }
+      }
+      $count = count($form['exposed']['sort_by']['#options']);
+      if ($count === 1) {
+        $form['exposed']['sort_by']['#access'] = FALSE;
+        $form['exposed']['sort_by']['#value'] = key($form['exposed']['sort_by']['#options']);
+      }
+      elseif ($count === 0) {
+        unset($exposed_form['sort_by']);
+        unset($exposed_form['sort_order']);
+      }
+    }
   }
 
   if (isset($exposed_form['sort_order'])) {
     $form['exposed']['sort_order'] = $exposed_form['sort_order'];
+    if (isset($conf['exposed']['sort_order'])) {
+      $form['exposed']['sort_order']['#default_value'] = $conf['exposed']['sort_order'];
+    }
   }
 
   // Add the view object to the form to allow additional customization.
@@ -569,8 +513,22 @@ function views_content_views_panes_content_type_edit_form($form, &$form_state) {
  */
 function views_content_views_panes_content_type_edit_form_submit(&$form, &$form_state) {
   // Copy everything from our defaults.
-  $keys = array('link_to_view', 'more_link', 'feed_icons', 'use_pager',
-    'pager_id', 'items_per_page', 'offset', 'path_override', 'path', 'arguments', 'fields_override', 'exposed',
+  $keys = array(
+    'link_to_view',
+    'more_link',
+    'more_link_always',
+    'more_text',
+    'feed_icons',
+    'use_pager',
+    'pager_id',
+    'items_per_page',
+    'offset',
+    'path_override',
+    'path',
+    'arguments',
+    'fields_override',
+    'exposed',
+    'show_exposed_form',
   );
 
   foreach ($keys as $key) {
