@@ -4,6 +4,7 @@
  * The plugin that handles a panel_pane.
  */
 class views_content_plugin_display_panel_pane extends views_plugin_display {
+
   /**
    * If this variable is true, this display counts as a panel pane. We use
    * this variable so that other modules can create alternate pane displays.
@@ -11,7 +12,16 @@ class views_content_plugin_display_panel_pane extends views_plugin_display {
   public $panel_pane_display = TRUE;
   public $has_pane_conf = NULL;
 
+  /**
+   * {@inheritdoc}
+   */
+  public function has_path() {
+    return TRUE;
+  }
 
+  /**
+   * {@inheritdoc}
+   */
   public function option_definition() {
     $options = parent::option_definition();
 
